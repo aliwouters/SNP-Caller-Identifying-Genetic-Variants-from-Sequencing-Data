@@ -1,10 +1,9 @@
-##Install/Import Required Packages
+#Part 1
 !pip install -q pysam biopython pandas
 import pysam
 import pandas as pd
 import os
 
-##Connect to Google Drive to Access Files
 # Connect notebook to Google Drive
 from google.colab import drive
 drive.mount('/content/drive', force_remount=True)
@@ -14,13 +13,10 @@ project_path = "/content/drive/My Drive/CS 121/Project 3"
 !pwd
 !ls
 
-##Load Files
 bam_path = os.path.join(project_path, "out_sort.bam")
 fasta_path = os.path.join(project_path, "chr1_1e6_2e6.fasta")
 snp_path = os.path.join(project_path, "putatative_snps.tsv")
 
-
-##Process SNPs
 try:
     bam = pysam.AlignmentFile(bam_path, "rb")
     fasta = pysam.FastaFile(fasta_path)
@@ -59,3 +55,74 @@ try:
 
 except Exception as e:
     print("ERROR:", str(e))
+
+#Part 2
+import numpy as np
+
+snp_path = os.path.join(project_path, "putatative_snps.tsv")
+obs_path = os.path.join(project_path, "snp_observations.tsv")
+
+snps = pd.read_csv(snp_path, sep="\t")
+obs = pd.read_csv(obs_path, sep="\t")
+
+def phred_to_log_prob(q):
+    error_prob = 10 ** (-q / 10)
+    return np.log(1 - error_prob), np.log(error_prob)
+
+def compute_log_likelihood(observations, genotype, major, minor):
+    log_likelihood = 0.0
+    for _, row in observations.iterrows():
+        obs_base = row['observation']
+        q = row['phred']
+        log_correct, log_error = phred_to_log_prob(q)
+
+        if genotype == 'AA':
+            log_likelihood += log_correct if obs_base == major else log_error
+        elif genotype == 'AB':
+            log_likelihood += np.log(0.5)
+        elif genotype == 'BB':
+            log_likelihood += log_correct if obs_base == minor else log_error
+    return log_likelihood
+
+
+
+snps = pd.read_csv('putatative_snps.tsv', sep="\t")
+snps["pos"] = snps["pos"].astype(int)
+
+results = []
+for _, row in snps.iterrows():
+    chrom = row['chr']
+    pos = row['pos']
+    ref = row['ref']
+    alt = row['alt']
+
+    obs_subset = obs[obs['position'] == pos]
+    if obs_subset.empty:
+        continue
+
+    log_likelihoods = {
+        'AA': compute_log_likelihood(obs_subset, 'AA', ref, alt),
+        'AB': compute_log_likelihood(obs_subset, 'AB', ref, alt),
+        'BB': compute_log_likelihood(obs_subset, 'BB', ref, alt),
+    }
+
+    logs = np.array(list(log_likelihoods.values()))
+    max_log = np.max(logs)
+    log_probs = logs - max_log
+    probs = np.exp(log_probs)
+    probs /= np.sum(probs)
+
+    results.append({
+        'chrom': chrom,
+        'position': pos,
+        'P(AA)': round(probs[0], 4),
+        'P(AB)': round(probs[1], 4),
+        'P(BB)': round(probs[2], 4),
+    })
+
+df_posteriors = pd.DataFrame(results)
+posterior_path = os.path.join(project_path, "genotype_posteriors.tsv")
+df_posteriors.to_csv(posterior_path, sep="\t", index=False)
+print(f"Saved posterior probabilities to: {posterior_path}")
+
+
