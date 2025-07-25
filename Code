@@ -1,0 +1,61 @@
+##Install/Import Required Packages
+!pip install -q pysam biopython pandas
+import pysam
+import pandas as pd
+import os
+
+##Connect to Google Drive to Access Files
+# Connect notebook to Google Drive
+from google.colab import drive
+drive.mount('/content/drive', force_remount=True)
+# Navigate to the shared drive folder
+project_path = "/content/drive/My Drive/CS 121/Project 3"
+%cd '/content/drive/My Drive/CS 121/Project 3'
+!pwd
+!ls
+
+##Load Files
+bam_path = os.path.join(project_path, "out_sort.bam")
+fasta_path = os.path.join(project_path, "chr1_1e6_2e6.fasta")
+snp_path = os.path.join(project_path, "putatative_snps.tsv")
+
+
+##Process SNPs
+try:
+    bam = pysam.AlignmentFile(bam_path, "rb")
+    fasta = pysam.FastaFile(fasta_path)
+    snps = pd.read_csv(snp_path, sep="\t")
+
+    results = []
+
+    for _, row in snps.iterrows():
+        chrom = row['chr']
+        pos_1based = int(row['pos'])
+        pos_0based = pos_1based - 1
+
+        for read in bam.fetch(chrom, pos_0based, pos_0based + 1):
+            ref_positions = read.get_reference_positions(full_length=True)
+            if pos_0based in ref_positions:
+                query_index = ref_positions.index(pos_0based)
+                if read.query_sequence is None or read.query_qualities is None:
+                    continue
+                try:
+                    base = read.query_sequence[query_index]
+                    phred = read.query_qualities[query_index]
+                    results.append({
+                        'read_name': read.query_name,
+                        'position': pos_1based,
+                        'observation': base,
+                        'phred': phred
+                    })
+                except IndexError:
+                    continue
+
+    # Save output to Drive
+    output_path = os.path.join(project_path, "snp_observations.tsv")
+    df = pd.DataFrame(results)
+    df.to_csv(output_path, sep="\t", index=False)
+    print(f"Output saved to: {output_path}")
+
+except Exception as e:
+    print("ERROR:", str(e))
